@@ -1,49 +1,42 @@
-.. openmm-lib documentation master file, created by
-   sphinx-quickstart on Mon Mar 26 21:38:46 2012.
+.. polychrom documentation master file, created by
+   sphinx-quickstart on Sat Jan  4 15:17:36 2020.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to openmm-lib's documentation!
-======================================
+Welcome to the documentation for the polychrom package
+======================================================
 
-This is a wrapper to OpenMM designed to run and analyze polymer simulations (Brownyan dynamics). 
+Polychrom is a package for setting up, performing and analyzing polymer simulations of chromosomes. 
+The simulation part is based around VJ Pande's OpenMM library - a GPU-assisted framework for general molecular dynamics simulations. 
+The analysis part is written by the mirnylab. 
 
-You can use this library if:
+Installation
+------------
 
--You need to run a coarse-grained polymer simulation
--You have equally sized monomers
--You need to have ability to make monomers transparent
--You want a fast and efficient way to calculate things like Rg(s) and Pc(s) (Pc - contact probability)
--You want to deal with knot complexity (Alexander's polynomial) or linking number 
--You want to analyze contact maps
--You want to make cool pictures in pymol
--You want to replicate simulations from the Mirnylab papers. 
+Polychrom requires OpenMM, which can be installed through conda: ``conda install -c omnia openmm``. See http://docs.openmm.org/latest/userguide/application.html#installing-openmm . In our experience, adding ``-c conda-forge`` listed in the link above is optional. 
 
-The main library, openmmlib, is a class to perform simulations. 
+CUDA is the fastest GPU-assisted backend to OpenMM. You would need to have the required version of CUDA, or install OpenMM compiled for your version of CUDA. 
 
-A file knotAnalysis.py contains code needed to calculate Alexander's polynomials,
-a measure of knot complexity. It also uses OpenMM to help unwrap polymer and
-reduce time needed to calculate Alexander's polynomial
+Other dependencies are simple, and are listed in requirements.txt. All but joblib are installable from either conda/pip, and joblib installs well with pip. 
 
-A file polymerScalings.py has some utilities to calculate Rg(s) and Pc(s) for
-polymer conformations in a fast and efficient way.
 
-A file contactmaps.py has code to quickly calculate contacts within a polymer structure,
-and organize them as contactmaps. It is used by polymerScalings.
+Structure
+---------
 
-A file pymol_show has utilities to visualize polymer conformations using pymol
- 
-Contents:
+Polychrom is an API, and each simulation has to be set up as a Python script. Simulations are done using a "simulation" module :py:mod:`polychrom.simulation`. Forces that define the simulation are found in :py:mod:`polychrom.forces` and :py:mod:`polychrom.forcekits` modules. Contactmaps from simulated conformations can be generated using :py:mod:`polychrom.contactmaps` module. Loading and saving individual conformations can be done using :py:mod:`polychrom.polymerutils`, while loading/saving whole trajetories is done using :py:mod:`polychrom.hdf5_format`. P(s), R(s), Rg(s) curves and other analyses can be done using :py:mod:`polychrom.polymer_analyses`. 
+
+
 
 .. toctree::
-   :maxdepth: 3
-
-   openmmlib
-   contactmaps
-   knotAnalysis
-   polymerutils
-   polymerScalings
- 
+   :maxdepth: 2   
+   
+   polychrom.simulation
+   polychrom.polymerutils
+   polychrom.hdf5_format
+   polychrom.polymer_analyses
+   polychrom.contactmaps
+   polychrom.forces
+   
 
 
 Indices and tables
@@ -52,4 +45,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-
