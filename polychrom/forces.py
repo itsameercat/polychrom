@@ -7,6 +7,21 @@ This module defines forces commonly used in polychrom. Most forces are implement
 custom forces in openmm. The force equations were generally derived such that the force and the 
 first derivative both go to zero at the cutoff radius. 
 
+Parametrization of bond forces 
+******************************
+
+Most of the bond forces are parametrized using two parametrs: bondLength and bondWiggleDistance. 
+The parameter *bondLength* is length of the bond at rest, while *bondWiggleDistance* 
+is the estension of the bond at which energy reaches 1kT. 
+
+Note that the actual standard deviation of the bond length is bondWiggleDistance/sqrt(2) 
+for a harmonic bond force, and is bondWiggleDistance*sqrt(2) for constant force bonds, 
+so if you are switching from harmonic bonds to constant force, you may choose to decrease 
+the wiggleDistance by a factor of 2. 
+
+
+
+
 Note on energy equations
 ************************
 
@@ -40,6 +55,7 @@ One of the best examples of optimizing complex forces using polynomials is in
 """
 
 import re
+import warnings
 import itertools
 from collections.abc import Iterable
 
@@ -149,7 +165,16 @@ def harmonic_bonds(
     name="harmonic_bonds",
     override_checks=False,
 ):
-    """Adds harmonic bonds
+    """Adds harmonic bonds.
+    
+    Bonds are parametrized in the following way. 
+    
+    * A length of a bond at rest is `bondLength`
+    * Bond energy equal to 1kT at bondWiggleDistance 
+    
+    Note that bondWiggleDistance is not the standard deviation of the bond extension:
+    that is actually smaller by a factor of sqrt(2). 
+    
 
     Parameters
     ----------
@@ -157,7 +182,7 @@ def harmonic_bonds(
     bonds : iterable of (int, int)
         Pairs of particle indices to be connected with a bond.
     bondWiggleDistance : float or iterable of float
-        Average displacement from the equilibrium bond distance.
+        Distance at which bond energy equals kT. 
         Can be provided per-particle.
         If 0 then set k=0.
     bondLength : float or iterable of float
@@ -198,23 +223,34 @@ def harmonic_bonds(
     return force
 
 
-def FENE_bonds(
+def constant_force_bonds(
     sim_object,
     bonds,
     bondWiggleDistance=0.05,
     bondLength=1.0,
-    name="FENE_bonds",
+    quadraticPart = 0.02,
+    name="abs_bonds",
     override_checks=False,
 ):
-    """Adds harmonic bonds
-
+    """
+    
+    Constant force bond force. Energy is roughly linear with estension 
+    after r=quadraticPart; before it is quadratic to make sure the force
+    is differentiable. 
+    
+    Force is parametrized using the same approach as bond force:
+    it reaches U=kT at extension = bondWiggleDistance 
+    
+    Note that, just as with bondForce, mean squared extension 
+    is actually larger than wiggleDistance by sqrt(2) factor. 
+    
     Parameters
     ----------
     
     bonds : iterable of (int, int)
         Pairs of particle indices to be connected with a bond.
     bondWiggleDistance : float
-        Average displacement from the equilibrium bond distance.
+        Displacement at which bond energy equals 1 kT. 
         Can be provided per-particle.
     bondLength : float
         The length of the bond.
@@ -239,7 +275,7 @@ def FENE_bonds(
     force.addPerBondParameter("wiggle")
     force.addPerBondParameter("r0")
     force.addGlobalParameter("univK", sim_object.kT / sim_object.conlen)
-    force.addGlobalParameter("a", 0.02 * sim_object.conlen)
+    force.addGlobalParameter("a", quadraticPart * sim_object.conlen)
     force.addGlobalParameter("conlen", sim_object.conlen)
 
     bondLength = _to_array_1d(bondLength, len(bonds)) * sim_object.length_scale
@@ -304,7 +340,8 @@ def angle_force(
     force.addPerAngleParameter("angT0")
 
     for triplet_idx, (p1, p2, p3) in enumerate(triplets):
-        force.addAngle(p1, p2, p3, [k[triplet_idx], theta_0[triplet_idx]])
+        force.addAngle(int(p1), int(p2), int(p3), 
+                       (float(k[triplet_idx]), float(theta_0[triplet_idx])))
 
     return force
 
@@ -315,6 +352,9 @@ def polynomial_repulsive(
     """This is a simple polynomial repulsive potential. It has the value
     of `trunc` at zero, stays flat until 0.6-0.7 and then drops to zero
     together with its first derivative at r=1.0.
+    
+    See the gist below with an example of the potential. 
+    https://gist.github.com/mimakaev/0327bf6ffe7057ee0e0625092ec8e318
 
     Parameters
     ----------
@@ -627,10 +667,12 @@ def heteropolymer_SSW(
     Ntypes = max(monomerTypes) + 1  # IDs should be zero based
     if any(np.less(interactionMatrix.shape, [Ntypes, Ntypes])):
         raise ValueError("Need interactions for {0:d} types!".format(Ntypes))
+    if not np.allclose(interactionMatrix.T, interactionMatrix):
+        raise ValueError("Interaction matrix should be symmetric!")
 
     indexpairs = []
     for i in range(0, Ntypes):
-        for j in range(i, Ntypes):
+        for j in range(0, Ntypes):
             if (not interactionMatrix[i, j] == 0) or keepVanishingInteractions:
                 indexpairs.append((i, j))
 
@@ -702,52 +744,6 @@ def heteropolymer_SSW(
     return force
 
 
-def spherical_well(
-    sim_object, particles, r, center=[0, 0, 0], width=1, depth=1, name="spherical_well"
-):
-    """
-    A spherical potential well, suited for example to simulate attraction to a lamina.
-
-    Parameters
-    ----------
-
-    particles : list of int or np.array
-        indices of particles that are attracted
-    r : float
-        Radius of the nucleus
-    center : vector, optional
-        center position of the sphere. This parameter is useful when confining
-        chromosomes to their territory.
-    width : float, optional
-        Width of attractive well, nm.
-    depth : float, optional
-        Depth of attractive potential in kT
-        NOTE: switched sign from openmm-polymer, because it was confusing. Now
-        this parameter is really the depth of the well, i.e. positive =
-        attractive, negative = repulsive
-    """
-
-    force = openmm.CustomExternalForce(
-        "-step(1+d)*step(1-d)*SPHWELLdepth*cos(3.1415926536*d)/2 + 0.5;"
-        "d = (sqrt((x-SPHWELLx)^2 + (y-SPHWELLy)^2 + (z-SPHWELLz)^2) - SPHWELLradius) / SPHWELLwidth"
-    )
-    force.name = name
-
-    force.addGlobalParameter("SPHWELLradius", r * sim_object.conlen)
-    force.addGlobalParameter("SPHWELLwidth", width * sim_object.conlen)
-    force.addGlobalParameter("SPHWELLdepth", depth * sim_object.kT)
-    force.addGlobalParameter("SPHWELLx", center[0] * sim_object.conlen)
-    force.addGlobalParameter("SPHWELLy", center[1] * sim_object.conlen)
-    force.addGlobalParameter("SPHWELLz", center[2] * sim_object.conlen)
-
-    # adding all the particles on which force acts
-    for i in particles:
-        # NOTE: the explicit type cast seems to be necessary if we have an np.array...
-        force.addParticle(int(i), [])
-
-    return force
-
-
 def cylindrical_confinement(
     sim_object, r, bottom=None, k=0.1, top=9999, name="cylindrical_confinement"
 ):
@@ -794,6 +790,9 @@ def spherical_confinement(
     k=5.0,  # How steep the walls are
     density=0.3,  # target density, measured in particles
     # per cubic nanometer (bond size is 1 nm)
+    center=[0,0,0],
+    invert=False,
+    particles=None,
     name="spherical_confinement",
 ):
     """Constrain particles to be within a sphere.
@@ -810,16 +809,25 @@ def spherical_confinement(
         Density for autodetection of confining radius.
         Density is calculated in particles per nm^3,
         i.e. at density 1 each sphere has a 1x1x1 cube.
+    center : [float, float, float]
+        The coordinates of the center of the sphere.
+    invert : bool
+        If True, particles are not confinded, but *excluded* from the sphere.
+    particles : list of int
+        The list of particles affected by the force. 
+        If None, apply the force to all particles.
     """
 
     force = openmm.CustomExternalForce(
-        "step(r-aa) * kb * (sqrt((r-aa)*(r-aa) + t*t) - t); "
-        "r = sqrt(x^2 + y^2 + z^2 + tt^2)"
+        "step(invert_sign*(r-aa)) * kb * (sqrt((r-aa)*(r-aa) + t*t) - t); "
+        "r = sqrt((x-x0)^2 + (y-y0)^2 + (z-z0)^2 + tt^2)"
     )
     force.name = name
 
-    for i in range(sim_object.N):
-        force.addParticle(i, [])
+    particles = range(sim_object.N) if particles is None else particles
+    for i in particles:
+        force.addParticle(int(i), [])
+
     if r == "density":
         r = (3 * sim_object.N / (4 * 3.141592 * density)) ** (1 / 3.0)
 
@@ -830,6 +838,12 @@ def spherical_confinement(
     force.addGlobalParameter("aa", (r - 1.0 / k) * simtk.unit.nanometer)
     force.addGlobalParameter("t", (1.0 / k) * simtk.unit.nanometer / 10.0)
     force.addGlobalParameter("tt", 0.01 * simtk.unit.nanometer)
+    force.addGlobalParameter("invert_sign", (-1) if invert else 1)
+
+    force.addGlobalParameter("x0", center[0] * simtk.unit.nanometer)
+    force.addGlobalParameter("y0", center[1] * simtk.unit.nanometer)
+    force.addGlobalParameter("z0", center[2] * simtk.unit.nanometer)
+
 
     ## TODO: move 'r' elsewhere?..
     sim_object.sphericalConfinementRadius = r
@@ -837,7 +851,54 @@ def spherical_confinement(
     return force
 
 
-def tether_particles(sim_object, particles, k=30, positions="current", name="Tethers"):
+def spherical_well(
+    sim_object, particles, r, center=[0, 0, 0], width=1, depth=1, name="spherical_well"
+):
+    """
+    A spherical potential well, suited for example to simulate attraction to a lamina.
+
+    Parameters
+    ----------
+
+    particles : list of int or np.array
+        indices of particles that are attracted
+    r : float
+        Radius of the nucleus
+    center : vector, optional
+        center position of the sphere. This parameter is useful when confining
+        chromosomes to their territory.
+    width : float, optional
+        Width of attractive well, nm.
+    depth : float, optional
+        Depth of attractive potential in kT
+        NOTE: switched sign from openmm-polymer, because it was confusing. Now
+        this parameter is really the depth of the well, i.e. positive =
+        attractive, negative = repulsive
+    """
+
+    force = openmm.CustomExternalForce(
+        "step(1+d) * step(1-d) * SPHWELLdepth * (1 - cos(3.1415926536*d)) / 2;"
+        "d = (sqrt((x-SPHWELLx)^2 + (y-SPHWELLy)^2 + (z-SPHWELLz)^2) - SPHWELLradius) / SPHWELLwidth"
+    )
+
+    force.name = name
+
+    force.addGlobalParameter("SPHWELLradius", r * sim_object.conlen)
+    force.addGlobalParameter("SPHWELLwidth", width * sim_object.conlen)
+    force.addGlobalParameter("SPHWELLdepth", depth * sim_object.kT)
+    force.addGlobalParameter("SPHWELLx", center[0] * sim_object.conlen)
+    force.addGlobalParameter("SPHWELLy", center[1] * sim_object.conlen)
+    force.addGlobalParameter("SPHWELLz", center[2] * sim_object.conlen)
+
+    # adding all the particles on which force acts
+    for i in particles:
+        # NOTE: the explicit type cast seems to be necessary if we have an np.array...
+        force.addParticle(int(i), [])
+
+    return force
+
+
+def tether_particles(sim_object, particles, *, pbc=False, k=30, positions="current", name="Tethers"):
     """tethers particles in the 'particles' array.
     Increase k to tether them stronger, but watch the system!
 
@@ -847,14 +908,21 @@ def tether_particles(sim_object, particles, k=30, positions="current", name="Tet
     particles : list of ints
         List of particles to be tethered (fixed in space).
         Negative values are allowed.
+        
+    pbc : Bool, optional
+        If True, periodicdistance function is applied
     k : int, optional
         The steepness of the tethering potential.
         Values >30 will require decreasing potential, but will make tethering 
         rock solid.
         Can be provided as a vector [kx, ky, kz].
     """
-
-    energy = "kx * (x - x0)^2 + ky * (y - y0)^2 + kz * (z - z0)^2"
+    
+    if pbc:
+        energy = "kx * periodicdistance(x, 0, 0, x0, 0, 0)^2 + ky * periodicdistance(0, y, 0, 0, y0, 0)^2 + kz * periodicdistance(0, 0, z, 0, 0, z0)^2"
+    else:
+        energy = "kx * (x - x0)^2 + ky * (y - y0)^2 + kz * (z - z0)^2"
+        
     force = openmm.CustomExternalForce(energy)
     force.name = name
 
@@ -872,6 +940,7 @@ def tether_particles(sim_object, particles, k=30, positions="current", name="Tet
     force.addGlobalParameter("kx", kx * sim_object.kT / nm2)
     force.addGlobalParameter("ky", ky * sim_object.kT / nm2)
     force.addGlobalParameter("kz", kz * sim_object.kT / nm2)
+
     force.addPerParticleParameter("x0")
     force.addPerParticleParameter("y0")
     force.addPerParticleParameter("z0")
@@ -1011,7 +1080,7 @@ def grosberg_angle(
 
 
 def grosberg_repulsive_force(
-    sim_object, trunc=None, radiusMult=1.0, name="grosberg_repulsive"
+    sim_object, trunc=None,  radiusMult=1.0, name="grosberg_repulsive",trunc_function = "min(trunc1, trunc2)",
 ):
     """This is the fastest non-transparent repulsive force.
     (that preserves topology, doesn't allow chain passing)
@@ -1020,12 +1089,19 @@ def grosberg_repulsive_force(
      nonconcatenated ring polymers in a melt. I. Statics."
      The Journal of chemical physics 134 (2011): 204904.)
     Parameters
-    ----------
-
-    trunc : None or float
-         truncation energy in kT, used for chain crossing.
-         Value of 1.5 yields frequent passing,
-         3 - average passing, 5 - rare passing.
+    ----------    
+    
+    trunc : None, float or N-array of floats    
+        "transparency" values for each particular particle, 
+        which correspond to the truncation values in kT for the grosberg repulsion energy between a pair of such particles.
+        Value of 1.5 yields frequent passing,
+        3 - average passing, 5 - rare passing.
+    radiusMult : float (optional)
+        Multiplier for the size of the force. To make scale the energy larger, set to be more than 1.         
+    trunc_function : str (optional)
+        a formula to calculate the truncation between a pair of particles with transparencies trunc1 and trunc2
+        Default is min(trunc1, trunc2)
+ 
 
     """
     radius = sim_object.conlen * radiusMult
@@ -1033,9 +1109,11 @@ def grosberg_repulsive_force(
     if trunc is None:
         repul_energy = "4 * e * ((sigma/r)^12 - (sigma/r)^6) + e"
     else:
+        trunc = _to_array_1d(trunc, sim_object.N)
         repul_energy = (
-            "step(cut2 - U) * U"
-            " + step(U - cut2) * cut2 * (1 + tanh(U/cut2 - 1));"
+            "step(cut2*trunc_pair - U) * U"
+            " + step(U - cut2*trunc_pair) * cut2 * trunc_pair * (1 + tanh(U/(cut2*trunc_pair) - 1));"
+            f"trunc_pair={trunc_function};"
             "U = 4 * e * ((sigma/r2)^12 - (sigma/r2)^6) + e;"
             "r2 = (r^10. + (sigma03)^10.)^0.1"
         )
@@ -1045,12 +1123,17 @@ def grosberg_repulsive_force(
     force.addGlobalParameter("e", sim_object.kT)
     force.addGlobalParameter("sigma", radius)
     force.addGlobalParameter("sigma03", 0.3 * radius)
+    
     if trunc is not None:
-        force.addGlobalParameter("cut", sim_object.kT * trunc)
-        force.addGlobalParameter("cut2", 0.5 * trunc * sim_object.kT)
-    for _ in range(sim_object.N):
-        force.addParticle(())
+        force.addGlobalParameter("cut2", 0.5 * sim_object.kT)
+        force.addPerParticleParameter("trunc")
 
+        for i in range(sim_object.N):  # adding all the particles on which force acts
+            force.addParticle([float(trunc[i])])
+    else:
+        for i in range(sim_object.N):  # adding all the particles on which force acts
+            force.addParticle(())
+        
     force.setCutoffDistance(nbCutOffDist)
 
     return force

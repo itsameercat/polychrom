@@ -85,8 +85,8 @@ import os
 import time
 import tempfile
 import logging
+import warnings
 
-from six import string_types
 
 from collections.abc import Iterable
 
@@ -97,6 +97,18 @@ from . import forces
 
 logging.basicConfig(level=logging.INFO)
 
+# updated manually every now and then
+VER_LATEST = "7.5"
+VER_DATE = "2020-12-15"
+
+ver_cur = openmm.__version__
+if ver_cur < VER_LATEST:
+    warnings.warn(f"\n WARNING: you have OpenMM {ver_cur}; {VER_LATEST} is the latest as of {VER_DATE}, "
+                  "Upgrade is recommended.")
+    print("to upgrade openmm, run --->  conda install -c conda-forge openmm")
+    print("Ideally in a new conda environment")
+    
+    
 
 class IntegrationFailError(Exception):
     pass
@@ -264,7 +276,7 @@ class Simulation(object):
         self.collisionRate = kwargs["collision_rate"] * (1 / simtk.unit.picosecond)
 
         self.integrator_type = kwargs["integrator"]
-        if isinstance(self.integrator_type, string_types):
+        if isinstance(self.integrator_type, str):
             self.integrator_type = str(self.integrator_type)
             if self.integrator_type.lower() == "langevin":
                 self.integrator = openmm.LangevinIntegrator(
@@ -277,6 +289,12 @@ class Simulation(object):
                     self.temperature,
                     kwargs["collision_rate"] * (1 / simtk.unit.picosecond),
                     kwargs["error_tol"],
+                )
+            elif self.integrator_type.lower() == "langevinmiddle":
+                self.integrator = openmm.LangevinMiddleIntegrator(
+                    self.temperature,
+                    kwargs["collision_rate"] * (1 / simtk.unit.picosecond),
+                    kwargs["timestep"] * simtk.unit.femtosecond,
                 )
             elif self.integrator_type.lower() == "verlet":
                 self.integrator = openmm.VariableVerletIntegrator(
